@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: crypto-alerts-db
+    environment:
+      POSTGRES_USER: crypto_user
+      POSTGRES_PASSWORD: crypto_password
+      POSTGRES_DB: crypto_alerts
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - crypto-alerts-network
+
+  # Backend API Server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: crypto-alerts-backend
+    environment:
+      DATABASE_URL: postgresql://crypto_user:crypto_password@postgres:5432/crypto_alerts
+      PORT: 5000
+      NODE_ENV: development
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - crypto-alerts-network
+
+  # Telegram Bot Service
+  telegram-bot:
+    build:
+      context: ./telegram-bot
+      dockerfile: Dockerfile
+    container_name: crypto-alerts-telegram
+    environment:
+      DATABASE_URL: postgresql://crypto_user:crypto_password@postgres:5432/crypto_alerts
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      API_URL: http://backend:5000
+      NODE_ENV: development
+    depends_on:
+      - postgres
+      - backend
+    volumes:
+      - ./telegram-bot:/app
+      - /app/node_modules
+    networks:
+      - crypto-alerts-network
+
+  # Email Service
+  email-service:
+    build:
+      context: ./email-service
+      dockerfile: Dockerfile
+    container_name: crypto-alerts-email
+    environment:
+      DATABASE_URL: postgresql://crypto_user:crypto_password@postgres:5432/crypto_alerts
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      API_URL: http://backend:5000
+      NODE_ENV: development
+    depends_on:
+      - postgres
+      - backend
+    volumes:
+      - ./email-service:/app
+      - /app/node_modules
+    networks:
+      - crypto-alerts-network
+
+  # Frontend Dashboard
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: crypto-alerts-frontend
+    environment:
+      VITE_API_URL: http://localhost:5000
+    ports:
+      - "3000:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - crypto-alerts-network
+
+  # Redis Cache (Optional - for rate limiting and sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: crypto-alerts-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - crypto-alerts-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  crypto-alerts-network:
+    driver: bridge
